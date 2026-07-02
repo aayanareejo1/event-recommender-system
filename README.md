@@ -66,3 +66,19 @@ streamlit run src/app.py
 - Data is currently sourced only from Devpost's hackathon listing; MLH and other event types (conferences, meetups) are a planned extension.
 - The scraper occasionally mislabels location/format fields due to text bleeding between adjacent listings during LLM extraction; this is logged and tolerated rather than blocking the pipeline, per the project's non-functional requirements.
 - The dashboard reads pre-computed scores rather than running live inference, due to a TensorFlow Hub / Streamlit threading conflict on macOS.
+## Technical deep dive: problems hit and how they were solved
+
+**Scraping a JavaScript-rendered, infinite-scroll page**
+Devpost's hackathon listing loads content dynamically; a plain `requests.get()` call only returned the empty page shell. Switched to Playwright to actually render the page in a headless browser. Standard `mouse.wheel()` scrolling didn't trigger the lazy-loading; `page.keyboard.press("End")` did. Raw HTML (including embedded `<script>` tags) confused the extraction LLM into hallucinating structure from JavaScript, fixed by stripping `script`/`style` tags with BeautifulSoup before passing text to the model. Large content chunks caused the LLM's JSON output to get truncated mid-object; fixed by reducing chunk size to 3000 characters and raising `num_predict` to 4096. Final result: 345 unique, real hackathon events collected and deduplicated by title.
+
+**Baseline ML model failure and diagnosis**
+The first classifier (TextVectorization + embeddings trained from scratch) showed validation accuracy frozen at exactly ~75% across all 20 training epochs, a sign it was just predicting the majority class rather than learning. With only ~340 labeled examples, there wasn't enough data to train useful word embeddings from zero. Diagnosed by noticing validation accuracy never varied between epochs even as training accuracy fluctuated. Fixed by swapping to TensorFlow Hub's pretrained Universal Sentence Encoder (transfer learning), which already understands general language and needed far less data to specialize. Validation accuracy then climbed steadily to ~80% with real epoch-over-epoch improvement.
+
+**Separation of concerns**
+The `LocationFilter` class was built and unit tested completely independently of the ML model, per the project's design principles, the model never receives location data, and the filter never accesses model internals. This means either layer can be modified or replaced without touching the other.
+
+**Streamlit + TensorFlow Hub deadlock**
+Loading the TensorFlow Hub model live inside Streamlit's process caused an indefinite hang (a low-level mutex lock conflict specific to how Streamlit runs scripts on macOS). Worked around by decoupling inference from the UI: rankings are precomputed to a CSV by a separate script, and the Streamlit dashboard only reads and filters that CSV, no live model loading inside the web app.
+
+**Git history and large files**
+Accidentally committed the full `venv/` folder and an 980MB saved model file (the full Universal Sentence Encoder gets serialized into `.keras` files by default), exceeding GitHub's 100MB file limit and blocking pushes. Fixed with a proper `.gitignore` (excluding `venv/` and `*.keras`) and a full git history reset to remove the large files from prior commits entirely.
