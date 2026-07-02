@@ -1,0 +1,9 @@
+beautifulsoup4==4.15.0
+pandas==2.3.3
+playwright==1.60.0
+scikit-learn==1.6.1
+streamlit==1.50.0
+tensorflow==2.20.0
+tensorflow-hub==0.16.1
+tensorflow-text==2.20.1
+undetected-playwright==0.3.0
